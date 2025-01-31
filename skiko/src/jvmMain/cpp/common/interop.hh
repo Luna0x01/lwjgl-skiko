@@ -10,6 +10,7 @@
 #include "SkMatrix.h"
 #include "SkM44.h"
 #include "SkPaint.h"
+#include "SkPicture.h"
 #include "SkRefCnt.h"
 #include "SkRect.h"
 #include "SkRRect.h"

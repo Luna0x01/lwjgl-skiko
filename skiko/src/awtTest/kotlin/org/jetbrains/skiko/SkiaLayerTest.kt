@@ -1,13 +1,11 @@
+@file:OptIn(ExperimentalSkikoApi::class)
+
 package org.jetbrains.skiko
 
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.yield
+import kotlinx.coroutines.*
+import org.jetbrains.skia.*
 import org.jetbrains.skia.Canvas
-import org.jetbrains.skia.FontMgr
 import org.jetbrains.skia.Paint
-import org.jetbrains.skia.Rect
 import org.jetbrains.skia.paragraph.FontCollection
 import org.jetbrains.skia.paragraph.ParagraphBuilder
 import org.jetbrains.skia.paragraph.ParagraphStyle
@@ -15,6 +13,7 @@ import org.jetbrains.skia.paragraph.TextStyle
 import org.jetbrains.skiko.context.JvmContextHandler
 import org.jetbrains.skiko.redrawer.MetalRedrawer
 import org.jetbrains.skiko.redrawer.Redrawer
+import org.jetbrains.skiko.swing.SkiaSwingLayer
 import org.jetbrains.skiko.util.ScreenshotTestRule
 import org.jetbrains.skiko.util.UiTestScope
 import org.jetbrains.skiko.util.UiTestWindow
@@ -24,9 +23,8 @@ import org.junit.Assume.assumeTrue
 import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
-import java.awt.BorderLayout
+import java.awt.*
 import java.awt.Color
-import java.awt.Dimension
 import java.awt.event.*
 import javax.swing.Box
 import javax.swing.JFrame
@@ -174,6 +172,35 @@ class SkiaLayerTest {
 
             app.rectWidth = 100
             window.layer.needRedraw()
+            delay(1000)
+            screenshots.assert(window.bounds, "frame2")
+        } finally {
+            window.close()
+        }
+    }
+
+    @Test
+    fun `render single swing layer`() = uiTest {
+        val window = JFrame()
+        val app = RectRenderer(window, 200, 100, Color.RED)
+        val layer = SkiaSwingLayer(
+            app,
+            properties = SkiaLayerProperties(renderApi = renderApi)
+        )
+        window.contentPane.add(layer)
+        try {
+            window.setLocation(200, 200)
+            window.setSize(400, 200)
+            layer.setSize(400, 200)
+            window.defaultCloseOperation = WindowConstants.DISPOSE_ON_CLOSE
+            window.isUndecorated = true
+            window.isVisible = true
+
+            delay(1000)
+            screenshots.assert(window.bounds, "frame1")
+
+            app.rectWidth = 100
+            layer.repaint()
             delay(1000)
             screenshots.assert(window.bounds, "frame2")
         } finally {
@@ -941,18 +968,68 @@ class SkiaLayerTest {
         }
     }
 
+    @Test
+    fun `content not relaid out on window move`() = uiTest {
+        var layoutCount = 0
+
+        val window = UiTestWindow {
+            contentPane.layout = object: BorderLayout() {
+                override fun layoutContainer(parent: Container?) {
+                    super.layoutContainer(parent)
+                    layoutCount++
+                }
+            }
+            contentPane.add(layer)
+        }
+        window.size = Dimension(400, 400)
+        window.isVisible = true
+
+        repeat(20) {
+            window.location = window.location.let {
+                java.awt.Point(it.x + 10, it.y + 10)
+            }
+            delay(50)
+        }
+
+        // Ideally, layoutCount would be just 1, but Swing appears to call layout one extra time, so it ends up being 2.
+        // Compare to 3 just to avoid a false-failure if there's another layout for whatever reason.
+        // What we're interested to validate is that there's no layout occurring on every window move.
+        assert(layoutCount <= 3) {
+            "Layout count: $layoutCount"
+        }
+    }
+
     private class RectRenderer(
-        private val layer: SkiaLayer,
+        private val getContentScale: () -> Float,
         var rectWidth: Int,
         var rectHeight: Int,
         private val rectColor: Color
     ) : SkikoRenderDelegate {
+        constructor(
+            layer: SkiaLayer,
+            rectWidth: Int,
+            rectHeight: Int,
+            rectColor: Color
+        ) : this(
+            { layer.contentScale }, rectWidth, rectHeight, rectColor
+        )
+
+        constructor(
+            layer: JFrame,
+            rectWidth: Int,
+            rectHeight: Int,
+            rectColor: Color
+        ) : this(
+            { layer.graphicsConfiguration.defaultTransform.scaleX.toFloat() }, rectWidth, rectHeight, rectColor
+        )
+
+        private val contentScale get() = getContentScale()
+
         override fun onRender(canvas: Canvas, width: Int, height: Int, nanoTime: Long) {
-            val dpi = layer.contentScale
             canvas.drawRect(Rect(0f, 0f, width.toFloat(), height.toFloat()), Paint().apply {
                 color = Color.WHITE.rgb
             })
-            canvas.drawRect(Rect(0f, 0f, rectWidth * dpi, rectHeight * dpi), Paint().apply {
+            canvas.drawRect(Rect(0f, 0f, rectWidth * contentScale, rectHeight * contentScale), Paint().apply {
                 color = rectColor.rgb
             })
         }
